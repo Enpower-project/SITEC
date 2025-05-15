@@ -1,4 +1,4 @@
-![alt text](figures/logo_Enershare.png)
+
 ```
   ____   _____  ____   ____   _       _               
  |  _ \ | ____|/ ___| / ___| (_) ____(_) _ __    __ _ 
@@ -11,7 +11,7 @@
 # Documentation
 
 The *REC Sizing* use case aims to provide an **optimal investment plan** for Renewable Energy Communities (REC) and 
-Citizen Energy Communities (CEC) under the *Enershare* project. 
+Citizen Energy Communities (CEC) under the *ENPOWER* project. 
 
 To that end, a library was implemented, named ***rec_sizing*** (**R**enewable **E**nergy **C**ommunities **Sizing**), 
 that provides the user with several options for running a MILP optimization aimed at **minimizing the collective 
