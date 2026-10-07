@@ -203,6 +203,49 @@ def run_pre_collective_pool_milp(
 									measurement resolution, with 'timestamp' and 'load' pairwise keys. The estimated
 									usage should have the usages starting timestamp in the 'start' key, and the duration
 									in the 'duration' key.
+				'hvac': structure where several btm HVAC units can be defined
+					{'HVAC_ID': {
+                    'type': HVAC type (inverter or state),
+                    'mu': Building insulation factor,
+                    'psi': HVAC temperature efficiency factor,
+                    'temp_min': Min room temperature constraint, ºC,
+                    'temp_max': Max room temperature constraint, ºC,
+                    'init_temp': Initial room temperature, ºC,
+                    'hvac_capacity': Maximum HVAC power, kW,
+                    't_out': Outside temperature, ºC,
+                    'thermal_resist': thermal resistence, ºC/kW,
+                    'thermal_cap': thermal capacity, kWh/ºC
+                }}
+                'hp': structure where several btm Heat Pump units can be defined
+                {'type': 'inverter',  # type
+                    'power_rated': 4.0,  # Rated power of HP [kW]
+                    'capacity_tank': 500,  # Water tank capacity [kg]
+                    'c_p': 4.18,  # Specific heat capacity of water [kJ/kg°C]
+
+                    # Initial and desired temperatures
+                    'temp_inlet': 15.0,  # Inlet water temp [°C]
+                    'temp_desired': 55.0,  # Desired water temp [°C]
+                    'temp_out_init': 50.0,  # Initial outlet temp [°C]
+                    'temp_indoor_init': 18,  # Initial indoor temp [°C]
+                    'temp_indoor_final': 22,  # Final indoor temp [°C]
+
+                    # Comfort temperature bounds
+                    'temp_indoor_min': 20.0,  # Min indoor temp [°C]
+                    'temp_indoor_max': 24.0,  # Max indoor temp [°C]
+                    'temp_out_min': 50.0,  # Min outlet temp [°C]
+                    'temp_out_max': 70.0,  # Max outlet temp [°C]
+
+                    # Building parameters
+                    'u_value': 0.3,  # Building heat loss coefficient [kW/°C]
+                    'thermal_resistance': 3,  # Building thermal resistance coefficient
+                    'h_rad': 0.05,  # Convective heat transfer coeff of radiator [kW/m2°C]
+                    'area_rad': 5.0,  # Radiator surface area [m²]
+
+                    # External time-varying series
+                    'mass_hw_demand': [0.0, 1 , 1],
+                    'mass_radiator': [50] * 3,
+                    't_out': [14, 14, 14],
+                }
 			}
 		}
 	}
@@ -254,6 +297,16 @@ def run_pre_collective_pool_milp(
 		'ewh_delta_use' dict of bool with EWH hot water usage, per time step, per meter
 		'ewh_optimized_load': dict of floats for EWH optimized load diagram, per time step, per meter
 		'ewh_original_load': dict of floats for EWH original load diagram, per time step, per meter
+		'hvac_power': dict of floats with the HVAC power consumption, per time step, per meter
+		'hvac_temp': dict of float with the HVAC temperature, per time step, per meter
+		'hvac_cost_comfort': dict of floats with the cost for not keeping the max and min temperatures, per time step, per meter
+		'hp_power': Power consumed by the HP, per time step, per meter
+		'hp_temp_indoor': Indoor temperature controler by the HP, per time step, per meter
+		'hp_power_circulation': HP circulation power consumption, per time step, per meter
+		'hp_power_heating': Power consumption of HP for increasing the water temperature, per time step, per meter
+		'hp_power_tank': Power consumption of HP for increasing the tank temperature, per time step, per meter
+		'hp_outlet_temp': Outlet water temperature controlled by the HP, per time step, per meter
+		'hp_cost_comfort': Penalty for exceeding temperature limits, per time step, per meter
 	}
 	"""
 	logger.info('Running a pre-delivery standalone/second stage collective (pool) MILP...')

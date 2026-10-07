@@ -3,27 +3,11 @@ Class for implementing and running the Stage 2 MILP for an energy community.
 The implementation is specific to a pool market structure.
 """
 import itertools
-import numpy as np
+import math
 import os
 import re
-import pickle
 
-from rec_sizing.configs.configs import (
-	MIPGAP,
-	SOLVER,
-	TIMEOUT
-)
-from rec_sizing.optimization.helpers.milp_helpers import (
-	dict_none_lists,
-	dict_per_param,
-	none_lists,
-	round_up,
-	time_intervals
-)
-from rec_sizing.custom_types.collective_milp_pool_types import (
-	BackpackCollectivePoolDict,
-	OutputsCollectivePoolDict
-)
+import numpy as np
 from loguru import logger
 from pulp import (
 	CPLEX_CMD,
@@ -36,7 +20,24 @@ from pulp import (
 	lpSum,
 	LpVariable,
 	pulp,
-	value
+	value,
+	LpInteger
+)
+
+from rec_sizing.configs.configs import (
+	MIPGAP,
+	SOLVER,
+	TIMEOUT
+)
+from rec_sizing.custom_types.collective_milp_pool_types import (
+	BackpackCollectivePoolDict,
+	OutputsCollectivePoolDict
+)
+from rec_sizing.optimization.helpers.milp_helpers import (
+	dict_none_lists,
+	dict_per_param,
+	none_lists,
+	time_intervals
 )
 
 
@@ -138,6 +139,43 @@ class CollectiveMILPPool:
 		self.regressor_belowSet_m_temp = {}
 		self.regressor_belowSet_m_delta = {}
 		self.regressor_belowSet_b = {}
+		# HVAC
+		self._hvac = {}
+		self.mu = {}  # Building insulation factor
+		self.psi = {}  # HVAC temperature efficiency factor
+		self.hvac_temp_min = {}  # Min room temperature constraint
+		self.hvac_temp_max = {}  # Max room temperature constraint
+		self.hvac_init_temp = {}  # Initial room temperature
+		self.hvac_capacity = {}  # Maximum HVAC power
+		self.T_out = {}  # Outside temperature
+		self.set_hvac = {}  # Set of active HVAC units
+		self.thermal_resist = {}
+		self.thermal_cap = {}
+		self.type = {}
+		# HP
+		self._hp = {}
+		self.set_hp = {}
+		self.hp_type = {}
+		self.hp_power_rated = {}
+		self.hp_capacity_tank = {}
+		self.hp_c_p = {}
+		self.hp_temp_inlet = {}
+		self.hp_temp_desired = {}
+		self.hp_temp_out_init = {}
+		self.hp_temp_indoor_init = {}
+		self.hp_temp_indoor_final = {}
+		self.hp_temp_indoor_min = {}
+		self.hp_temp_indoor_max = {}
+		self.hp_temp_out_min = {}
+		self.hp_temp_out_max = {}
+		self.hp_u_value = {}
+		self.hp_thermal_resistance = {}
+		self.hp_h_rad = {}
+		self.hp_area_rad = {}
+		self.hp_mass_hw_demand = {}
+		self.hp_mass_radiator = {}
+		self.hp_t_out = {}
+
 
 	def __define_milp(self):
 		"""
@@ -261,6 +299,53 @@ class CollectiveMILPPool:
 				else:
 					varBackpack[n] = []
 
+		# Unpack HVAC information
+		for n in self.set_meters:
+			if self._meters_data[n].get('hvac') is not None:
+				self._hvac = self._meters_data[n].get('hvac')
+				self.set_hvac[n] = list(self._hvac.keys())
+				self.mu[n] = {h: self._hvac[h]['mu'] for h in self.set_hvac[n]}
+				self.psi[n] = {h: self._hvac[h]['psi'] for h in self.set_hvac[n]}
+				self.hvac_capacity[n] = {h: self._hvac[h]['hvac_capacity'] for h in self.set_hvac[n]}
+				self.hvac_temp_min[n] = {h: self._hvac[h]['temp_min'] for h in self.set_hvac[n]}
+				self.hvac_temp_max[n] = {h: self._hvac[h]['temp_max'] for h in self.set_hvac[n]}
+				self.hvac_init_temp[n] = {h: self._hvac[h]['init_temp'] for h in self.set_hvac[n]}
+				self.T_out[n] = {h: self._hvac[h]['t_out'] for h in self.set_hvac[n]}
+				self.thermal_resist[n] = {h: self._hvac[h]['thermal_resist'] for h in self.set_hvac[n]}
+				self.thermal_cap[n] = {h: self._hvac[h]['thermal_cap'] for h in self.set_hvac[n]}
+				self.type[n] = {h: self._hvac[h]['type'] for h in self.set_hvac[n]}
+			else:
+				self.set_hvac[n] = []
+
+		#Unpack HP information
+		for n in self.set_meters:
+			if self._meters_data[n].get('hp') is not None:
+				self._hp = self._meters_data[n].get('hp')
+				self.set_hp[n] = list(self._hp.keys())
+				self.hp_type[n] = {hp: self._hp[hp]['type'] for hp in self.set_hp[n]}
+				self.hp_power_rated[n] = {hp: self._hp[hp]['power_rated'] for hp in self.set_hp[n]}
+				self.hp_capacity_tank[n] = {hp: self._hp[hp]['capacity_tank'] for hp in self.set_hp[n]}
+				self.hp_c_p[n] = {hp: self._hp[hp]['c_p'] for hp in self.set_hp[n]}
+				self.hp_temp_inlet[n] = {hp: self._hp[hp]['temp_inlet'] for hp in self.set_hp[n]}
+				self.hp_temp_desired[n] = {hp: self._hp[hp]['temp_desired'] for hp in self.set_hp[n]}
+				self.hp_temp_out_init[n] = {hp: self._hp[hp]['temp_out_init'] for hp in self.set_hp[n]}
+				self.hp_temp_indoor_init[n] = {hp: self._hp[hp]['temp_indoor_init'] for hp in self.set_hp[n]}
+				self.hp_temp_indoor_final[n] = {hp: self._hp[hp]['temp_indoor_final'] for hp in self.set_hp[n]}
+				self.hp_temp_indoor_min[n] = {hp: self._hp[hp]['temp_indoor_min'] for hp in self.set_hp[n]}
+				self.hp_temp_indoor_max[n] = {hp: self._hp[hp]['temp_indoor_max'] for hp in self.set_hp[n]}
+				self.hp_temp_out_min[n] = {hp: self._hp[hp]['temp_out_min'] for hp in self.set_hp[n]}
+				self.hp_temp_out_max[n] = {hp: self._hp[hp]['temp_out_max'] for hp in self.set_hp[n]}
+				self.hp_u_value[n] = {hp: self._hp[hp]['u_value'] for hp in self.set_hp[n]}
+				self.hp_thermal_resistance[n] = {hp: self._hp[hp]['thermal_resistance'] for hp in self.set_hp[n]}
+				self.hp_h_rad[n] = {hp: self._hp[hp]['h_rad'] for hp in self.set_hp[n]}
+				self.hp_area_rad[n] = {hp: self._hp[hp]['area_rad'] for hp in self.set_hp[n]}
+				self.hp_mass_hw_demand[n] = {hp: self._hp[hp]['mass_hw_demand'] for hp in self.set_hp[n]}
+				self.hp_mass_radiator[n] = {hp: self._hp[hp]['mass_radiator'] for hp in self.set_hp[n]}
+				self.hp_t_out[n] = {hp: self._hp[hp]['t_out'] for hp in self.set_hp[n]}
+			else:
+				self.set_hp[n] = []
+
+
 		# Initialize the decision variables
 		# contracted power tariff by n [kW]
 		p_cont = {meter_id: None for meter_id in self.set_meters}
@@ -328,6 +413,32 @@ class CollectiveMILPPool:
 			binAux = {n: dict_none_lists(self.time_intervals, self.set_ewh[n]) for n in self.set_meters}
 			energyEWH = {n: dict_none_lists(self.time_intervals, self.set_ewh[n]) for n in self.set_meters}
 
+		# HVAC - Initialize decision variables
+		if self.set_hvac is not None:
+			hvac_temp = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+			hvac_power = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+			delta_hvac = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+			hvac_active = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+			hvac_cost_comfort = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+			hvac_mode = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+			hvac_mode_heat = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+			hvac_mode_off = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+			hvac_mode_cool = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in self.set_meters}
+
+		# HP - Initialize decision variables
+		if self.set_hp is not None:
+			self.hp_temp_indoor = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.hp_temp_outlet = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.hp_power = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.hp_active = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.hp_cost_comfort = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.hp_op_mode = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.heating_kwh = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.circulation_kw = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.tank_heating_kwh = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.hp_temp_return = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+			self.hp_lost_power = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in self.set_meters}
+
 		# Define the decision variables as puLP objets
 		if self.total_share_coeffs:
 			for t in self.time_series:
@@ -393,6 +504,33 @@ class CollectiveMILPPool:
 					# Pricing of that specific energy usage
 					energyEWH[n][e][t] = LpVariable(f'energyEWH_' + increment, lowBound=0)
 
+			if not all(not v for v in self.set_hvac.values()):
+				for h in self.set_hvac[n]:
+					increment = f'{n}_{h}_t{t:07d}'
+					hvac_temp[n][h][t] = LpVariable(f'hvac_temp_' + increment, lowBound=0)
+					hvac_power[n][h][t] = LpVariable(f'hvac_power_' + increment, lowBound=0)
+					delta_hvac[n][h][t] = LpVariable(f'delta_hvac_' + increment, lowBound=0, upBound=5, cat=LpInteger)
+					hvac_active[n][h][t] = LpVariable(f'hvac_active_' + increment, lowBound=0, upBound=1, cat=LpBinary)
+					hvac_mode[n][h][t] = LpVariable(f'hvac_mode_' + increment, lowBound=0, upBound=1, cat=LpBinary)
+					hvac_mode_heat[n][h][t] = LpVariable(f'hvac_mode_heat_' + increment, lowBound=0, upBound=1, cat=LpBinary)
+					hvac_mode_off[n][h][t] = LpVariable(f'hvac_mode_off_' + increment, lowBound=0, upBound=1, cat=LpBinary)
+					hvac_mode_cool[n][h][t] = LpVariable(f'hvac_mode_cool_' + increment, lowBound=0, upBound=1, cat=LpBinary)
+					hvac_cost_comfort[n][h][t] = LpVariable(f'hvac_cost_comfort_' + increment, lowBound=0)
+
+			if not all(not v for v in self.set_hp.values()):
+				for hp in self.set_hp[n]:
+					increment = f'{n}_{hp}_t{t:07d}'
+					self.hp_temp_indoor[n][hp][t] = LpVariable(f'hp_temp_indoor_' + increment, lowBound=0)
+					self.hp_temp_outlet[n][hp][t] = LpVariable(f'hp_temp_outlet_' + increment, lowBound=0)
+					self.hp_power[n][hp][t] = LpVariable(f'power_hp_' + increment, lowBound=0)
+					self.hp_active[n][hp][t] = LpVariable(f'hp_active_' + increment, lowBound=0, upBound=1, cat=LpBinary)
+					self.hp_cost_comfort[n][hp][t] = LpVariable(f'hp_cost_comfort_' + increment, lowBound=0)
+					self.heating_kwh[n][hp][t] = LpVariable(f'hp_power_heating_' + increment, lowBound=0)
+					self.circulation_kw[n][hp][t] = LpVariable(f'hp_power_circulation_' + increment, lowBound=0)
+					self.tank_heating_kwh[n][hp][t] = LpVariable(f'hp_power_tank_' + increment, lowBound=0)
+					self.hp_temp_return[n][hp][t] = LpVariable(f'hp_temp_return_' + increment, lowBound=0)
+					self.hp_lost_power[n][hp][t] = LpVariable(f'hp_lost_power_' + increment, lowBound=0)
+
 		# Eq. 1: Objective Function
 		objective = (
 				lpSum(
@@ -416,6 +554,19 @@ class CollectiveMILPPool:
 					for n in self.set_meters
 				)
 		)
+		# HVAC penalty
+		if not all(not v for v in self.set_hvac.values()):
+			for t in self.time_series:
+				for n in self.set_meters:
+					if t != 0 :
+						objective += (lpSum(hvac_cost_comfort[n][h][t] * 2 for h in self.set_hvac[n]))
+		# HP penalty
+		if not all(not v for v in self.set_hp.values()):
+			for t in self.time_series:
+				for n in self.set_meters:
+					if t != 0 :
+						objective += (lpSum(self.hp_cost_comfort[n][hp][t] * 2 for hp in self.set_hp[n]))
+
 		self.milp += objective, 'Objective Function'
 
 		# Eq. 2-35: Constraints
@@ -481,11 +632,14 @@ class CollectiveMILPPool:
 			# Eq. 2
 			# UPDATED WITH DISAGREGGATED EWH MODULES (ORIGINAL AND OPTIMIZED LOADS)
 			self.milp += \
-				e_cmet[n][t] == \
+				(e_cmet[n][t] == \
 				self._e_c[n][t] - e_g[n][t] + e_bc[n][t] - e_bd[n][t] + \
 				lpSum(p_ev_charge[n][ev][t] - p_ev_discharge[n][ev][t] for ev in self.sets_btm_ev[n]) + \
-				lpSum(- varBackpack[n][e]['original_load'][t] + energyEWH[n][e][t] for e in self.set_ewh[n]), \
-				'C_met_' + increment
+				lpSum(- varBackpack[n][e]['original_load'][t] + energyEWH[n][e][t] for e in self.set_ewh[n]) + \
+				+ (lpSum(hvac_power[n][h][t] * self._delta_t for h in self.set_hvac[n]) if not all(not v for v in self.set_hvac.values()) else 0) +
+				 (lpSum(self.hp_power[n][hp][t] * self._delta_t for hp in self.set_hp[n]) if not all(not v for v in self.set_hp.values()) else 0)
+, \
+				'C_met_' + increment)
 
 			# Eq. 3
 			match self.regulatory_context:
@@ -773,6 +927,192 @@ class CollectiveMILPPool:
 									 self.delta_t[n][e] * 60, \
 							f'Constraint_8.7_{n}_{e}_{t:07d}'
 
+		# HVAC Constraints
+		if not all(not v for v in self.set_hvac.values()):
+			for n, t in itertools.product(self.set_meters, self.time_series):
+				for h in self.set_hvac[n]:
+					increment = f'{n}_{h}_t{t:03d}'
+
+					# Temperature Evolution Equation
+					if t == 0:
+						self.milp += hvac_temp[n][h][t] == self.hvac_init_temp[n][
+							h], f'HVAC_Start_Temp_' + increment
+
+					if self.type[n][h] == 'inverter':
+						if t != 0:
+							# Heating equation
+							self.milp += (
+									hvac_temp[n][h][t]
+									- hvac_temp[n][h][t - 1]
+									- self.mu[n][h] * (self.T_out[n][h][t] - hvac_temp[n][h][t - 1])
+									- self.psi[n][h] * hvac_power[n][h][t] * self._delta_t
+									<= self._big_m * (1 - hvac_mode[n][h][t])
+							), f'HVAC_Heating_UB_' + increment
+							self.milp += (
+									hvac_temp[n][h][t]
+									- hvac_temp[n][h][t - 1]
+									- self.mu[n][h] * (self.T_out[n][h][t] - hvac_temp[n][h][t - 1])
+									- self.psi[n][h] * hvac_power[n][h][t] * self._delta_t
+									>= -self._big_m * (1 - hvac_mode[n][h][t])
+							), f'HVAC_Heating_LB_' + increment
+
+							# Cooling equation
+							self.milp += (
+									hvac_temp[n][h][t]
+									- hvac_temp[n][h][t - 1]
+									- self.mu[n][h] * (self.T_out[n][h][t] - hvac_temp[n][h][t - 1])
+									+ self.psi[n][h] * hvac_power[n][h][t] * self._delta_t
+									<= self._big_m * hvac_mode[n][h][t]
+							), f'HVAC_Cooling_UB_' + increment
+							self.milp += (
+									hvac_temp[n][h][t]
+									- hvac_temp[n][h][t - 1]
+									- self.mu[n][h] * (self.T_out[n][h][t] - hvac_temp[n][h][t - 1])
+									+ self.psi[n][h] * hvac_power[n][h][t] * self._delta_t
+									>= -self._big_m * hvac_mode[n][h][t]
+							), f'HVAC_Cooling_LB_' + increment
+
+						self.milp += delta_hvac[n][h][t] <= 5, f'HVAC_Activation_Control_' + increment
+						self.milp += hvac_power[n][h][t] == 0.2 * delta_hvac[n][h][t] * self.hvac_capacity[n][
+							h], f'HVAC_Power_Level_' + increment
+
+					if self.type[n][h] == 'state':
+						if t != 0:
+							self.milp += (
+										hvac_mode_heat[n][h][t] + hvac_mode_off[n][h][t] + hvac_mode_cool[n][h][
+									t] == 1), f'HVAC_mode_sum_' + increment
+							# Heating mode
+							self.milp += (hvac_temp[n][h][t] <= (
+									self.T_out[n][h][t] + hvac_power[n][h][t] * self.thermal_resist[n][h] - (
+									self.T_out[n][h][t] + hvac_power[n][h][t] * self.thermal_resist[n][h] -
+									hvac_temp[n][h][t - 1]) * math.exp(
+								- self._delta_t / (self.thermal_resist[n][h] * self.thermal_cap[n][h])))
+										  + self._big_m * (1 - hvac_mode_heat[n][h][
+										t])), f'HVAC_Heating_UB_state' + increment
+							self.milp += (hvac_temp[n][h][t] >= (
+									self.T_out[n][h][t] + hvac_power[n][h][t] * self.thermal_resist[n][h] - (
+									self.T_out[n][h][t] + hvac_power[n][h][t] * self.thermal_resist[n][h] -
+									hvac_temp[n][h][t - 1]) * math.exp(
+								- self._delta_t / (self.thermal_resist[n][h] * self.thermal_cap[n][h])))
+										  - self._big_m * (1 - hvac_mode_heat[n][h][
+										t])), f'HVAC_Heating_LB_state' + increment
+
+							# off mode
+							self.milp += (hvac_temp[n][h][t] <= (
+									self.T_out[n][h][t] - (
+									self.T_out[n][h][t] -
+									hvac_temp[n][h][t - 1]) * math.exp(
+								- self._delta_t / (self.thermal_resist[n][h] * self.thermal_cap[n][h])))
+										  + self._big_m * (1 - hvac_mode_off[n][h][
+										t])), f'HVAC_Off_UB_state' + increment
+							self.milp += (hvac_temp[n][h][t] >= (
+									self.T_out[n][h][t] - (
+									self.T_out[n][h][t] -
+									hvac_temp[n][h][t - 1]) * math.exp(
+								- self._delta_t / (self.thermal_resist[n][h] * self.thermal_cap[n][h])))
+										  - self._big_m * (1 - hvac_mode_off[n][h][
+										t])), f'HVAC_Off_LB_state' + increment
+
+							# Cooling mode
+							self.milp += (hvac_temp[n][h][t] <= (
+									self.T_out[n][h][t] - hvac_power[n][h][t] * self.thermal_resist[n][h] - (
+									self.T_out[n][h][t] - hvac_power[n][h][t] * self.thermal_resist[n][h] -
+									hvac_temp[n][h][t - 1]) * math.exp(
+								- self._delta_t / (self.thermal_resist[n][h] * self.thermal_cap[n][h])))
+										  + self._big_m * (1 - hvac_mode_cool[n][h][
+										t])), f'HVAC_Cooling_UB_state' + increment
+							self.milp += (hvac_temp[n][h][t] >= (
+									self.T_out[n][h][t] - hvac_power[n][h][t] * self.thermal_resist[n][h] - (
+									self.T_out[n][h][t] - hvac_power[n][h][t] * self.thermal_resist[n][h] -
+									hvac_temp[n][h][t - 1]) * math.exp(
+								- self._delta_t / (self.thermal_resist[n][h] * self.thermal_cap[n][h])))
+										  - self._big_m * (1 - hvac_mode_cool[n][h][
+										t])), f'HVAC_Cooling_LB_state' + increment
+
+						self.milp += hvac_active[n][h][t] == hvac_mode_heat[n][h][t] + hvac_mode_cool[n][h][
+							t], f'HVAC_Active_Link_' + increment
+						self.milp += hvac_power[n][h][t] == hvac_active[n][h][t] * self.hvac_capacity[n][
+							h], f'HVAC_On_Off_' + increment
+
+					# Force HVAC Activation If Temperature Exceeds Limits
+					# self.milp += hvac_temp[n][h][t] <= self.hvac_temp_max[n][h] + self._big_m * hvac_active[n][h][t], f'HVAC_Turn_On_Above_' + increment
+					# self.milp += hvac_temp[n][h][t] >= self.hvac_temp_min[n][h] - self._big_m * hvac_active[n][h][t], f'HVAC_Turn_On_Below_' + increment
+
+					self.milp += hvac_temp[n][h][t] - self.hvac_temp_max[n][h] <= hvac_cost_comfort[n][h][
+						t], f'HVAC_Cost_Above_UB' + increment
+					self.milp += hvac_temp[n][h][t] - self.hvac_temp_min[n][h] >= -hvac_cost_comfort[n][h][
+						t], f'HVAC_Cost_Below_UB' + increment
+
+		#HP constraints
+		if not all(not v for v in self.set_hp.values()):
+			for n, t in itertools.product(self.set_meters, self.time_series):
+				for hp in self.set_hp[n]:
+
+					if self.hp_type[n][hp] == 'inverter':
+
+						increment = f'{n}_{hp}_t{t:03d}'
+
+						self.milp += self.hp_power[n][hp][t] <= self.hp_power_rated[n][hp]
+
+						# HPT-2.1
+						self.milp += (self.hp_power[n][hp][t] >= self.heating_kwh[n][hp][t] +
+									self.circulation_kw[n][hp][t] + self.tank_heating_kwh[n][hp][t]), f'HP_Total_Power_' + increment
+
+						# HPT-2.2
+						self.milp += (self.heating_kwh[n][hp][t] >= self.hp_mass_hw_demand[n][hp][t] * self.hp_c_p[n][hp] * (
+									self.hp_temp_desired[n][hp] - self.hp_temp_inlet[n][
+								hp])/ 3600 * self._delta_t), f'HP_Heating_Demand_' + increment
+
+						# HPT-2.3
+						self.milp += (self.circulation_kw[n][hp][t] >= self.hp_mass_radiator[n][hp][t] * self.hp_c_p[n][hp] * (
+									self.hp_temp_outlet[n][hp][t] - self.hp_temp_return[n][hp][
+								t])/ 3600 * self._delta_t), f'HP_Circulation_Power_' + increment
+
+						# HPT-2.5
+						# if t ==0:
+						# 	self.milp += (self.tank_heating_kwh[hp][t] == self.hp_capacity_tank[hp] * self.hp_c_p[hp] * self.hp_temp_out_init[hp]/3600), f'HP_Tank_Init_' + increment
+						if t != 0:
+							# HPT-2.4
+							self.milp += (self.tank_heating_kwh[n][hp][t] >= self.hp_capacity_tank[n][hp] * self.hp_c_p[n][hp] * (
+									self.hp_temp_outlet[n][hp][t] - self.hp_temp_outlet[n][hp][
+								t - 1])/ 3600 * self._delta_t), f'HPT2.4_Tank_Heating_' + increment
+
+						# HPT-3
+						# self.milp += self.circulation_kw[hp][t] == ((self.hp_h_rad[hp] * self.hp_area_rad[hp]) * ((self.hp_temp_outlet[hp][t]
+						# 										+ self.hp_temp_return[hp][t])/2 - self.hp_temp_indoor[hp][t])), f'HP_Convective_Limit_' + increment
+
+						self.milp += (self.hp_mass_radiator[n][hp][t] * self.hp_c_p[n][hp] * (
+								self.hp_temp_outlet[n][hp][t] - self.hp_temp_return[n][hp][t]) / 3600) == (
+												(self.hp_h_rad[n][hp] * self.hp_area_rad[n][hp]) * ((self.hp_temp_outlet[n][hp][t]
+												+ self.hp_temp_return[n][hp][t]) / 2 - self.hp_temp_indoor[n][hp][t]) * self._delta_t), f'HP_Convective_Limit_' + increment
+
+
+						# HPT-4.1/ 4.2: Indoor temperature evolution
+						if t == 0:
+							self.milp += (self.hp_temp_indoor[n][hp][t] == self.hp_temp_indoor_init[n][hp]), f'HP_Indoor_Init_' + increment
+							self.milp += (self.hp_temp_outlet[n][hp][t] == self.hp_temp_out_init[n][hp]), f'HP_Outlet_Init_' + increment
+						else:
+							# self.milp += ( self.hp_temp_indoor[h][t] == self.hp_temp_indoor[h][t - 1]
+							# 					+ (self._delta_t / self.hp_thermal_resistance[h]) * self.hp_u_value[h] * (self.hp_t_out[h][t - 1] - self.hp_temp_indoor[h][t - 1])
+							# 					+ self.hp_h_rad[h] * self.hp_area_rad[h] * (self.hp_temp_outlet[h][t - 1] - self.hp_temp_indoor[h][t - 1])
+							# 			 ), f'HP_Indoor_Evolution_' + increment
+
+							self.milp += (self.hp_temp_indoor[n][hp][t] == self.hp_temp_indoor[n][hp][t - 1] * self.hp_u_value[n][hp] +
+										  self.hp_t_out[n][hp][t - 1] * (self._delta_t / self.hp_thermal_resistance[n][hp])
+										  + self.hp_h_rad[n][hp] * self.hp_area_rad[n][hp] * self.hp_temp_outlet[n][hp][
+											  t]), f'HP_Indoor_Evolution_' + increment
+
+						# HPT-5
+						self.milp += (self.hp_temp_indoor[n][hp][t] + self.hp_cost_comfort[n][hp][t] >= self.hp_temp_indoor_min[n][
+							hp]), f'HP_Temp_Min_WithSlack_' + increment
+						self.milp += (self.hp_temp_indoor[n][hp][t] + self.hp_cost_comfort[n][hp][t] <= self.hp_temp_indoor_max[n][
+							hp]), f'HP_Temp_Max_WithSlack_' + increment
+						# HPT-5
+						# self.milp += (self.hp_temp_outlet[n][hp][t] + self.hp_cost_comfort[n][hp][t] >= self.hp_temp_out_min[n][
+						# 	hp]), f'HP_TempOut_Min_WithSlack_' + increment
+						# self.milp += (self.hp_temp_outlet[n][hp][t] + self.hp_cost_comfort[n][hp][t] <= self.hp_temp_out_max[n][
+						# 	hp]), f'HP_TempOut_Max_WithSlack_' + increment
+
 		# Write MILP to .lp file
 		dir_name = os.path.abspath(os.path.join(__file__, '..'))
 		lp_file = os.path.join(dir_name, f'Stage2Pool.lp')
@@ -934,6 +1274,38 @@ class CollectiveMILPPool:
 			original_e_name = lambda v_name: [ori_e for ori_e in ewh_ids if e_matchd[ori_e] + '_' in v_name][0]
 			original_n_name = lambda v_name: [ori_n for ori_n in self.set_meters if matchd[ori_n] + '_' in v_name][0]
 
+		# HVAC outputs
+		if not all(not v for v in self.set_hvac.values()):
+			outputs['hvac_power'] = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in
+									 self.set_meters}
+			outputs['hvac_temp'] = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in
+									self.set_meters}
+			outputs['hvac_cost_comfort'] = {n: dict_none_lists(self.time_intervals, self.set_hvac[n]) for n in
+									self.set_meters}
+			hvac_ids = [bid for bids in [v for _, v in self.set_hvac.items()] for bid in bids]
+			h_matchd = {key: key.replace('-', '_') for key in hvac_ids}
+			original_h_name = lambda v_name: [ori_h for ori_h in hvac_ids if h_matchd[ori_h] + '_' in v_name][0]
+
+		#HP outputs
+		if not all(not v for v in self.set_hp.values()):
+			outputs['hp_power'] = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in
+									 self.set_meters}
+			outputs['hp_temp_indoor'] = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in
+									self.set_meters}
+			outputs['hp_power_circulation'] = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in
+											self.set_meters}
+			outputs['hp_power_heating'] = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in
+											   self.set_meters}
+			outputs['hp_power_tank'] = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in
+											   self.set_meters}
+			outputs['hp_outlet_temp'] = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in
+										self.set_meters}
+			outputs['hp_cost_comfort'] = {n: dict_none_lists(self.time_intervals, self.set_hp[n]) for n in
+										 self.set_meters}
+			hp_ids = [bid for bids in [v for _, v in self.set_hp.items()] for bid in bids]
+			hp_matchd = {key: key.replace('-', '_') for key in hp_ids}
+			original_hp_name = lambda v_name: [ori_hp for ori_hp in hp_ids if hp_matchd[ori_hp] + '_' in v_name][0]
+
 		for v in self.milp.variables():
 			if re.search('dummy', v.name):
 				continue
@@ -1023,7 +1395,7 @@ class CollectiveMILPPool:
 					outputs['delta_meter_balance'][n][step_nr] = v.varValue
 
 				# EWH outputs
-				elif re.search(f'temp_', v.name):
+				elif v.name.startswith('temp_') and not v.name.startswith(('hvac_temp_', 'hp_temp_indoor_')):
 					n = original_n_name(v.name)
 					e = original_e_name(v.name)
 					outputs['ewh_temp'][n][e][step_nr] = v.varValue
@@ -1034,6 +1406,50 @@ class CollectiveMILPPool:
 					outputs['ewh_optimized_load'][n][e][step_nr] = v.varValue * varBackpack[n][e]['ewh_power']
 					outputs['ewh_original_load'][n][e] = varBackpack[n][e]['original_load']
 					outputs['ewh_delta_use'][n][e] = varBackpack[n][e]['delta_use']
+
+				# HVAC
+				elif re.search(f'hvac_power_', v.name):
+					n = v.name.split('hvac_power_')[1].split('_HVAC')[0]
+					h = original_h_name(v.name)
+					outputs['hvac_power'][n][h][step_nr] = v.varValue
+				elif re.search(f'hvac_temp_', v.name):
+					n = v.name.split('hvac_temp_')[1].split('_HVAC')[0]
+					h = original_h_name(v.name)
+					outputs['hvac_temp'][n][h][step_nr] = v.varValue
+				elif re.search(f'hvac_cost_comfort_', v.name):
+					n = v.name.split('hvac_cost_comfort_')[1].split('_HVAC')[0]
+					h = original_h_name(v.name)
+					outputs['hvac_cost_comfort'][n][h][step_nr] = v.varValue
+
+				# HP
+				elif re.search(f'power_hp_', v.name):
+					n = v.name.split('power_hp_')[1].split('_HP')[0]
+					hp = original_hp_name(v.name)
+					outputs['hp_power'][n][hp][step_nr] = v.varValue
+				elif re.search(f'hp_temp_indoor_', v.name):
+					n = v.name.split('hp_temp_indoor_')[1].split('_HP')[0]
+					hp = original_hp_name(v.name)
+					outputs['hp_temp_indoor'][n][hp][step_nr] = v.varValue
+				elif re.search(f'hp_power_heating_', v.name):
+					n = v.name.split('hp_power_heating_')[1].split('_HP')[0]
+					hp = original_hp_name(v.name)
+					outputs['hp_power_heating'][n][hp][step_nr] = v.varValue
+				elif re.search(f'hp_power_circulation_', v.name):
+					n = v.name.split('hp_power_circulation_')[1].split('_HP')[0]
+					hp = original_hp_name(v.name)
+					outputs['hp_power_circulation'][n][hp][step_nr] = v.varValue
+				elif re.search(f'hp_power_tank_', v.name):
+					n = v.name.split('hp_power_tank_')[1].split('_HP')[0]
+					hp = original_hp_name(v.name)
+					outputs['hp_power_tank'][n][hp][step_nr] = v.varValue
+				elif re.search(f'hp_temp_outlet_', v.name):
+					n = v.name.split('hp_temp_outlet_')[1].split('_HP')[0]
+					hp = original_hp_name(v.name)
+					outputs['hp_outlet_temp'][n][hp][step_nr] = v.varValue
+				elif re.search(f'hp_cost_comfort_', v.name):
+					n = v.name.split('hp_cost_comfort_')[1].split('_HP')[0]
+					hp = original_hp_name(v.name)
+					outputs['hp_cost_comfort'][n][hp][step_nr] = v.varValue
 
 		# Include other individual cost metrics
 		outputs['c_ind2pool'] = {n: None for n in self.set_meters}
